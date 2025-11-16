@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.16.5"
+__generated_with = "0.17.8"
 app = marimo.App(width="full")
 
 
@@ -9,9 +9,8 @@ def _():
     import marimo as mo
     from datasets import load_dataset
     from sklearn.model_selection import train_test_split
-    from transformers import RobertaTokenizerFast, TrainingArguments, Trainer
+    from transformers import RobertaTokenizerFast, TrainingArguments, Trainer, senten
     from sklearn.decomposition import NMF, LatentDirichletAllocation, MiniBatchNMF
-    from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
     import pandas as pd
     import altair as alt
     from wordcloud import WordCloud
@@ -38,68 +37,131 @@ def _(load_dataset, pd):
 
 @app.cell
 def _(mo):
-    mo.md(r"""## EDA""")
+    mo.md(r"""
+    ## EDA
+    """)
     return
 
 
 @app.cell
 def _(alt, pd):
-    def create_top_n_pie_chart(df: pd.DataFrame, subreddit_col='subreddit', count_col='value', top_n=10):
+    def create_top_n_pie_chart(
+        df: pd.DataFrame, subreddit_col="subreddit", count_col="value", top_n=10
+    ):
+        df = df.groupby(subreddit_col).size().reset_index(name=count_col)
+
         # 1. Sort and identify Top N
-        df_sorted = df.sort_values(count_col, ascending=False).reset_index(drop=True)
+        df_sorted = df.sort_values(count_col, ascending=False).reset_index(
+            drop=True
+        )
         df_top_n = df_sorted.head(top_n).copy()
 
-        # 2. Calculate the 'Others' group value
+        # 2. Calculate the percentage
         total_sum = df_sorted[count_col].sum()
-        top_n_sum = df_top_n[count_col].sum()
-        others_value = total_sum - top_n_sum
+        df_top_n["percentage"] = (df_top_n[count_col] / total_sum) * 100
 
-        # 3. Create the 'Others' row and combine the data
+        # 3. Calculate the 'Others' group value and percentage
+        others_value = total_sum - df_top_n[count_col].sum()
         if others_value > 0:
-            df_others = pd.DataFrame([{subreddit_col: 'Others', count_col: others_value}])
+            df_others = pd.DataFrame(
+                [
+                    {
+                        subreddit_col: "Others",
+                        count_col: others_value,
+                        "percentage": (others_value / total_sum) * 100,
+                    }
+                ]
+            )
             df_final = pd.concat([df_top_n, df_others], ignore_index=True)
         else:
-            # If there are 10 or fewer, no 'Others' group is needed
             df_final = df_top_n.copy()
 
-        # 4. Create the Altair Pie Chart
-        base = alt.Chart(df_final).encode(
-            # Encode angle using the count column
-            theta=alt.Theta(count_col, stack=True),
-            # Add tooltips for hover interaction
-            tooltip=[subreddit_col, count_col]
-        ).properties(
-            title=f"Top {top_n} Subreddits by Comment Count"
+        # 4. Create the Altair Pie Chart with percentage
+        base = (
+            alt.Chart(df_final)
+            .encode(
+                theta=alt.Theta("percentage", stack=True),
+                color=alt.Color(field=subreddit_col, title="Subreddit"),
+                tooltip=[subreddit_col, count_col, "percentage"],
+            )
+            .properties(
+                title=f"Top {top_n} Subreddits by Comment Count (Percentage)"
+            )
         )
 
-        # Pie/Donut Chart
         pie = base.mark_arc(outerRadius=120).encode(
-            # Encode color using the subreddit column
-            color=alt.Color(subreddit_col, title="Subreddit"),
-            # Set sort order to ensure segments are consistent (largest to smallest)
-            order=alt.Order(count_col, sort="descending")
+            order=alt.Order("percentage", sort="descending")
         )
 
-        # Optional: Text labels showing the count
         text = base.mark_text(radius=140).encode(
-            text=alt.Text(count_col),
-            order=alt.Order(count_col, sort="descending"),
-            color=alt.value("black")
+            text=alt.Text("percentage:Q", format=".1f"),
+            order=alt.Order("percentage", sort="descending"),
+            color=alt.value("black"),
         )
 
-        return (pie).interactive()
+        return (pie + text).interactive()
     return (create_top_n_pie_chart,)
+
+
+app._unparsable_cell(
+    r"""
+    wdef create_subreddit_histogram(df: pd.DataFrame):
+        df = df.groupby('subreddit').size().reset_index(name='value')
+        histogram = alt.Chart(df).mark_bar().encode(
+            x=alt.X('subreddit', title='Subreddit', sort='-y'),  # Sort by count
+            y=alt.Y('value:Q', title='Number of Comments'),
+            color=alt.Color('subreddit', title='Subreddit')
+        ).properties(
+            title='Comments Count per Subreddit'
+        )
+    
+        return histogram
+    """,
+    name="_"
+)
+
+
+@app.cell
+def _(df):
+    # Length of comments
+    df["body"].map(lambda comment: len(comment)).describe()
+    return
+
+
+@app.cell
+def _(df):
+    df.groupby("subreddit").size().to_frame("value").describe()
+    return
 
 
 @app.cell
 def _(create_top_n_pie_chart, df):
-    create_top_n_pie_chart(df=df.groupby("subreddit").size().to_frame('value'))
+    create_top_n_pie_chart(df=df, top_n=10)
+    return
+
+
+@app.cell
+def _():
     return
 
 
 @app.cell
 def _(WordCloud):
     WordCloud(max_words=1000).generate()
+    return
+
+
+@app.cell
+def _(df):
+    df["score"].describe()
+    return
+
+
+@app.cell
+def _(df):
+    from bertopic import BERTopic
+    bertopic = BERTopic(embedding_model="all-MiniLM-L6-v2")
+    topics, prob = bertopic.fit_transform(df["body"])
     return
 
 

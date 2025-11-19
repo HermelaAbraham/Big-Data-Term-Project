@@ -15,6 +15,8 @@ def _():
     import pandas as pd
     import altair as alt
     from wordcloud import WordCloud
+    import torch
+    from transformers import BertTokenizer, BertForSequenceClassification
     return WordCloud, alt, load_dataset, mo, pd
 
 
@@ -30,16 +32,12 @@ def _(load_dataset, pd):
             "created_utc",
             "controversiality",
         ]
-    )
+    ).filter(lambda x: x["score"] != 1)
+
+
     df = dataset.take(100000)
     df = pd.DataFrame(list(df))
     return (df,)
-
-
-@app.cell
-def _(df):
-    df
-    return
 
 
 @app.cell
@@ -56,7 +54,7 @@ app._unparsable_cell(
         \"\"\"Returns a pie chart with the distribution of subreddits
         Allows us to analyze whether the dataset that we have is biased towards a single subreddit
         \"\"\"
-    
+
         df: pd.DataFrame, subreddit_col=\"subreddit\", count_col=\"value\", top_n=10
     ):
         df = df.groupby(subreddit_col).size().reset_index(name=count_col)
@@ -118,7 +116,45 @@ app._unparsable_cell(
 
 @app.cell
 def _(df):
-    df["score"]
+    df["score"].describe()
+    return
+
+
+@app.cell
+def _(pd):
+    def count_words_with_body(df: pd.DataFrame) -> pd.DataFrame:
+        """Count words in the 'body' column and return a DataFrame with the body and corresponding word counts."""
+        word_counts = df['body'].apply(lambda x: len(x.split()))
+        return pd.DataFrame({"body": df['body'], "word_count": word_counts})
+    return (count_words_with_body,)
+
+
+@app.cell
+def _(alt, pd):
+    def create_word_count_histogram(df: pd.DataFrame, column: str, title: str):
+        """Visualizes a histogram of word counts for the specified column in the DataFrame."""
+        # Count words in the specified column
+        word_counts = df[column].apply(lambda x: len(x.split()))
+
+        # Create a DataFrame from the word counts
+        count_df = pd.DataFrame({"word_count": word_counts})
+
+        # Create the Altair histogram
+        chart = alt.Chart(count_df).mark_bar().encode(
+            x=alt.X('word_count', bin=alt.Bin(maxbins=500), title='Word Count'),
+            y=alt.Y('count()', title='Frequency'),
+            tooltip=[alt.Tooltip('word_count', bin=True), 'count()']
+        ).properties(
+            title=title
+        ).interactive()
+
+        return chart
+    return (create_word_count_histogram,)
+
+
+@app.cell
+def _(create_word_count_histogram, df):
+    create_word_count_histogram(df=df, column="body", title="huh")
     return
 
 
@@ -128,34 +164,32 @@ def _(alt, pd):
         # === PANDAS FILTERING STEP ===
         # 1. Start with the full series
         filtered_series = score_series.copy()
-    
+
         # 2. Apply the filters directly to the series (more efficient)
         if low_score is not None:
             filtered_series = filtered_series[filtered_series >= low_score]
-        
+
         if high_score is not None:
             filtered_series = filtered_series[filtered_series <= high_score]
         # =============================
-    
+
         # 3. Convert the filtered Series to a DataFrame
         df = filtered_series.to_frame(name='score')
 
         # Create the Altair Density Plot (KDE)
-        chart = alt.Chart(df).transform_density(
-            density='score',
-            # Define the names for the two new columns created by the transform
-            as_=['score', 'density']
-        ).mark_area(
-            opacity=0.5,
-            line=True
-        ).encode(
-            # X-axis is the original value, Y-axis is the calculated density
-            x=alt.X('score:Q', title='Value'),
-            y=alt.Y('density:Q', title='Probability Density'),
-            tooltip=[
-                alt.Tooltip('score:Q', title='Value'), 
-                alt.Tooltip('density:Q', title='Density')
-            ]
+        chart = alt.Chart(df).mark_bar().encode(
+        # Bin the 'Value' column to create the histogram bins.
+        # 'maxbins=30' specifies the maximum number of bars/bins.
+        x=alt.X('score', bin=alt.Bin(maxbins=200), title='Value Range'),
+
+        # Use 'count()' to get the frequency (bar height) for each bin.
+        y=alt.Y('count()', title='Frequency'),
+
+        # Add tooltips for interaction
+        tooltip=[
+            alt.Tooltip('score', bin=True, title='Value Range'), 
+            'count()'
+        ]
         ).properties(
             title=title
         ).interactive()
@@ -165,8 +199,37 @@ def _(alt, pd):
 
 
 @app.cell
-def _(create_score_histogram, df):
-    create_score_histogram(df["score"], "scores", low_score=-200, high_score=-50)
+def _(pd):
+    def get_top_frequent_words(df: pd.DataFrame, top_n: int = 20):
+        from collections import Counter
+        import re
+
+        # Combine all comments into a single string
+        text = " ".join(df["body"].astype(str).tolist())
+
+        # Use regex to remove punctuation and make everything lowercase
+        words = re.findall(r'\b\w+\b', text.lower())
+
+        # Count word frequencies
+        word_counts = Counter(words)
+
+        # Get the top N most common words
+        top_words = word_counts.most_common(top_n)
+
+        return pd.DataFrame(top_words, columns=["word", "frequency"])
+    return
+
+
+@app.cell
+def _(count_words_with_body, df):
+    count_words_with_body(df).describe()
+    return
+
+
+@app.cell
+def _(alt, create_score_histogram, df):
+    alt.data_transformers.enable("vegafusion")
+    create_score_histogram(df["score"], "scores", low_score=-30, high_score=100)
     return
 
 
@@ -207,33 +270,59 @@ def _(create_top_n_pie_chart, df):
 
 
 @app.cell
-def _(WordCloud, nltk, pd, wordcloud):
+def _(WordCloud, pd):
     def generate_stop_words(data: pd.Series, title: str):
+        import nltk
         from nltk.corpus import stopwords
         import matplotlib.pyplot as plt
+        import re
         nltk.download('stopwords')
         text = data.str.cat(sep = " ")
+        # Remove HTML tags and filter words with less than 5 characters
+        cleaned_text = re.sub(r'<.*?>', '', text)  # Remove HTML content
+        words = re.findall(r'\b\w{5,}\b', cleaned_text)  # Match words with 5 or more characters
+
         word_cloud = WordCloud(
             max_words=1000,
-            stopwords=stopwords.words('english'),
+            stopwords=stopwords.words('english').append("like"),
             collocations=False,
-        ).generate(text)
+            scale=2
+        ).generate(" ".join(words))  # Generate word cloud from filtered words
+
         plt.figure(figsize=(10, 5))
-        plt.imshow(wordcloud, interpolation='bilinear')
+        plt.imshow(word_cloud, interpolation='bilinear')
         plt.axis("off")
         plt.title(title)
+        plt.savefig(title, format='png', bbox_inches='tight')
         plt.show()
+    return (generate_stop_words,)
+
+
+@app.cell
+def _(df, generate_stop_words):
+    # Generate word clouds for comments with negative votes and positive votes
+    negative_scores_df = df[df["score"] > 5]
+    positive_scores_df = df[df["score"] < -3]
+    generate_stop_words(negative_scores_df["body"], title="Words commonly found with negatively voted comments")
+    return (positive_scores_df,)
+
+
+@app.cell
+def _(generate_stop_words, positive_scores_df):
+    generate_stop_words(positive_scores_df["body"], title="Words commonly found with positively voted comments")
     return
 
 
-app._unparsable_cell(
-    r"""
-    # Generate word clouds for 
-    low_score
-    generate_stop_words(df[df[\"score\"] < ])
-    """,
-    name="_"
-)
+@app.cell
+def _(df):
+    df[df["score"] > 5]
+    return
+
+
+@app.cell
+def _(df):
+    df[df["score"] < -3]
+    return
 
 
 @app.cell
@@ -243,8 +332,7 @@ def _(df):
 
 
 @app.cell
-def _(train_test):
-    X_test, X_train, y_test, y_train = train_test
+def _():
     return
 
 

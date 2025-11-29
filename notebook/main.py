@@ -17,10 +17,19 @@ def _():
     import altair as alt
     from wordcloud import WordCloud
     import torch
-    from transformers import BertTokenizer, BertForSequenceClassification
     import numpy as np
+    import pandas as pd
     alt.data_transformers.enable("vegafusion")
-    return RobertaTokenizerFast, WordCloud, alt, load_dataset, mo, pd
+    return (
+        RobertaTokenizerFast,
+        TrainingArguments,
+        WordCloud,
+        alt,
+        load_dataset,
+        mo,
+        pd,
+        torch,
+    )
 
 
 @app.cell

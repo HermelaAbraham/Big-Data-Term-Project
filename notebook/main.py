@@ -391,7 +391,52 @@ def _(generate_stop_words, positive_scores_df):
 @app.cell
 def _(mo):
     mo.md(r"""
-    ## RoBERTa
+    ## Preprocessing
+    """)
+    return
+
+
+@app.function
+def clean_comments(text: str):
+    import re
+   # --- Collapse spaced-out URL patterns specifically ---
+    # e.g., "h t t p : / /" -> "http://"
+    text = re.sub(r'h\s*t\s*t\s*p\s*:\s*/\s*/', 'http://', text, flags=re.IGNORECASE)
+    text = re.sub(r'h\s*t\s*t\s*p\s*s\s*:\s*/\s*/', 'https://', text, flags=re.IGNORECASE)
+
+    # Collapse domain patterns: "example . com" -> "example.com"
+    text = re.sub(r'(\w)\s*\.\s*(\w)', r'\1.\2', text)
+
+    # --- Collapse spaced HTML entities ONLY ---
+    # e.g., "& g t ;" -> "&gt;"
+    text = re.sub(r'&\s*([a-zA-Z0-9]+)\s*;', r'&\1;', text)
+
+    # --- Remove HTML entities ---
+    text = re.sub(r'&[#0-9a-zA-Z]+;', '', text)
+
+    # --- Remove markdown links ---
+    text = re.sub(r'\[\s*[^]]+?\s*\]\s*\(\s*[^)]+?\s*\)', '', text)
+
+    # --- Collapse any now-normalized URL after fixing spacing ---
+    text = re.sub(r'https?://\S+', '', text)
+    text = re.sub(r'www\.\S+', '', text)
+    text = re.sub(r'\b[a-z0-9.-]+\.[a-z]{2,}(?:/\S*)?', '', text, flags=re.IGNORECASE)
+
+    # --- Clean up leftover whitespace ---
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+@app.cell
+def _(clean_df):
+    clean_df
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ## Training
     """)
     return
 
@@ -406,13 +451,91 @@ def _(mo):
 
 @app.cell
 def _(RobertaTokenizerFast):
-    RobertaTokenizerFast.pre
+    tokenizer = RobertaTokenizerFast.from_pretrained("FacebookAI/roberta-base")
+    return (tokenizer,)
+
+
+@app.cell
+def _(TrainingArguments):
+    training_args = TrainingArguments(
+        output_dir="./results",           # Directory for saving model checkpoints
+        eval_strategy="epoch",    # Evaluate at the end of each epoch
+        save_strategy="epoch",
+        learning_rate=5e-5,              # Start with a small learning rate
+        per_device_train_batch_size=16,  # Batch size per GPU
+        per_device_eval_batch_size=16,
+        num_train_epochs=3,              # Number of epochs
+        weight_decay=0.01,               # Regularization
+        save_total_limit=2,              # Limit checkpoints to save space
+        load_best_model_at_end=True,     # Automatically load the best checkpoint
+        logging_dir="./logs",            # Directory for logs
+        logging_steps=100,               # Log every 100 steps
+        fp16=True                        # Enable mixed precision for faster training
+    )
     return
 
 
 @app.cell
-def _(df):
-    df
+def _(pd):
+    # Preprocessing function
+    def preprocess_function(df: pd.DataFrame):
+        # Filter out rows with body word count < 300
+        clean_df = df[df["body"].str.split().str.len() < 300]
+        clean_df["body"] = clean_df["body"].apply(clean_comments)
+        # Most common strings after clean_comments() invocation
+        JUNK_STRINGS = [
+            ",",
+            ".",
+            "http://",
+            "http:// /",
+            "no .",
+            "# 3232 ; \ _ # 3232 ;",
+            "yes .",
+            "no"
+        ]
+        not_junk_mask = ~clean_df['body'].isin(JUNK_STRINGS)
+        is_not_empty_or_whitespace = (clean_df['body'].str.strip() != "")
+    
+        # --- Step 3: Combine both masks ---
+        # Apply both conditions: must not be a junk string AND must not be empty/whitespace-only
+        combined_mask = not_junk_mask & is_not_empty_or_whitespace
+
+        return clean_df[combined_mask].copy()
+    return (preprocess_function,)
+
+
+@app.cell
+def _(df, preprocess_function):
+    clean_df = preprocess_function(df)
+    return (clean_df,)
+
+
+@app.cell
+def _(clean_df, pd, tokenizer):
+    def tokenize_text(df: pd.DataFrame):
+        encoded_tokens = tokenizer(
+            list(df["body"]), 
+            truncation=True, 
+            padding="max_length",
+            max_length=325
+        )
+        df["input_id"] = encoded_tokens["input_ids"]
+        df["attention_mask"] = encoded_tokens["attention_mask"]
+
+        return df
+    tokenize_text(clean_df)
+    return
+
+
+@app.cell
+def _(tokenized_df):
+    tokenized_df
+    return
+
+
+@app.cell
+def _(df, torch):
+    torch.nn.CrossEntropyLoss(weight=torch.tensor(df["score"]))
     return
 
 

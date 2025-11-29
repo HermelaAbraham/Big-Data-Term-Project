@@ -293,7 +293,7 @@ def _(alt, count_words_with_body, pd):
         """Visualizes a bar chart of word counts and their corresponding bodies."""
         # Call the count_words_with_body function to get the word counts
         word_counts_df = count_words_with_body(df)
-    
+
         # Create an Altair bar chart
         chart = alt.Chart(word_counts_df).mark_bar().encode(
             x=alt.X('word_count', title='Word Count'),
@@ -302,7 +302,7 @@ def _(alt, count_words_with_body, pd):
         ).properties(
             title=title
         ).interactive()
-    
+
         return chart
     return (create_word_counts_chart,)
 
@@ -339,32 +339,25 @@ def _(df):
 
 @app.cell
 def _(create_word_count_histogram, df):
-    create_word_count_histogram(df=df, column="body", title="huh")
+    create_word_count_histogram(df=df[df["body"].str.split().str.len() < 300], column="body", title="Comment Word Count Distribution")
+    return
+
+
+@app.cell
+def _(df):
+    df[df["body"].str.split().str.len() < 200]
     return
 
 
 @app.cell
 def _(count_words_with_body, df):
-    count_words_with_body(df).describe()
+    count_words_with_body(df)
     return
 
 
 @app.cell
 def _(create_score_histogram, df):
     create_score_histogram(df["score"], "scores", low_score=-10, high_score=50).save(fp="score_frequency.png", scale_factor=2)
-    return
-
-
-@app.cell
-def _(df):
-    df["score"]
-    return
-
-
-@app.cell
-def _(df):
-    # Length of comments
-    df["body"].map(lambda comment: len(comment)).describe()
     return
 
 
@@ -377,11 +370,6 @@ def _(df):
 @app.cell
 def _(create_top_n_pie_chart, df):
     create_top_n_pie_chart(df=df, top_n=10).save(fp="subreddit_pie.png", scale_factor=2)
-    return
-
-
-@app.cell
-def _():
     return
 
 

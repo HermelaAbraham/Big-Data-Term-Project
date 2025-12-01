@@ -10,7 +10,8 @@ def _():
     from datasets import load_dataset
     from sklearn.model_selection import train_test_split
     from sklearn.preprocessing import FunctionTransformer
-    from transformers import RobertaTokenizerFast, TrainingArguments, Trainer
+    from transformers import RobertaTokenizerFast, TrainingArguments, Trainer, AutoModelForSequenceClassification
+    from sklearn.utils.class_weight import compute_class_weight
     import matplotlib.pyplot as plt
     from sklearn.decomposition import NMF, LatentDirichletAllocation, MiniBatchNMF
     import pandas as pd
@@ -21,6 +22,7 @@ def _():
     import pandas as pd
     alt.data_transformers.enable("vegafusion")
     return (
+        AutoModelForSequenceClassification,
         RobertaTokenizerFast,
         TrainingArguments,
         WordCloud,
@@ -164,7 +166,7 @@ def _(pd):
     return (count_words_with_body,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(alt, pd):
     def create_score_histogram(score_series: pd.Series, title: str, low_score: float = None, high_score: float = None):
         # === PANDAS FILTERING STEP ===
@@ -340,6 +342,7 @@ def _(df):
 @app.cell
 def _(create_word_count_histogram, df):
     create_word_count_histogram(df=df[df["body"].str.split().str.len() < 300], column="body", title="Comment Word Count Distribution")
+        # .save(fp="word_count_distribution.png", scale_factor=2)
     return
 
 
@@ -428,12 +431,6 @@ def clean_comments(text: str):
 
 
 @app.cell
-def _(clean_df):
-    clean_df
-    return
-
-
-@app.cell
 def _(mo):
     mo.md(r"""
     ## Training
@@ -495,7 +492,7 @@ def _(pd):
         ]
         not_junk_mask = ~clean_df['body'].isin(JUNK_STRINGS)
         is_not_empty_or_whitespace = (clean_df['body'].str.strip() != "")
-    
+
         # --- Step 3: Combine both masks ---
         # Apply both conditions: must not be a junk string AND must not be empty/whitespace-only
         combined_mask = not_junk_mask & is_not_empty_or_whitespace
@@ -524,12 +521,22 @@ def _(clean_df, pd, tokenizer):
 
         return df
     tokenize_text(clean_df)
-    return
+    return (tokenize_text,)
+
+
+app._unparsable_cell(
+    r"""
+    #TODO:
+    - 
+    """,
+    name="_"
+)
 
 
 @app.cell
-def _(tokenized_df):
-    tokenized_df
+def _(AutoModelForSequenceClassification, clean_df, tokenize_text):
+    tokenized_df = tokenize_text(clean_df)
+    model = AutoModelForSequenceClassification.from_pretrained("FacebookAI/roberta-base", num_labels=4)
     return
 
 

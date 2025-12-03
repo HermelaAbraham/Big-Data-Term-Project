@@ -20,6 +20,7 @@ def _():
     from sklearn.utils.class_weight import compute_class_weight
     import matplotlib.pyplot as plt
     from sklearn.decomposition import NMF, LatentDirichletAllocation, MiniBatchNMF
+    from datasets import Dataset
     import pandas as pd
     import altair as alt
     from wordcloud import WordCloud
@@ -31,6 +32,7 @@ def _():
     return (
         AutoModelForSequenceClassification,
         AutoTokenizer,
+        Dataset,
         StandardScaler,
         Trainer,
         TrainingArguments,
@@ -286,7 +288,7 @@ def _(WordCloud, pd):
     return (generate_stop_words,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(alt, pd):
     def create_subreddit_histogram(df: pd.DataFrame):
         """Histogram of the subreddits"""
@@ -311,7 +313,7 @@ def _(alt, pd):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(alt, pd):
     def create_subreddit_avg_votes_histogram(data: pd.DataFrame):
         chart = (
@@ -518,9 +520,106 @@ def _(mo):
 
 
 @app.cell
-def _(AutoTokenizer):
-    tokenizer = AutoTokenizer.from_pretrained("FacebookAI/roberta-base")
-    return (tokenizer,)
+def _(AutoTokenizer, StandardScaler, np, pd):
+    def preprocess_function(df: pd.DataFrame):
+        def filter_word_count(df: pd.DataFrame):
+            # Filter out rows with body word count < 300
+            clean_df = df[df["body"].str.split().str.len() < 300]
+            clean_df["body"] = clean_df["body"].apply(clean_comments)
+            return clean_df
+
+        def filter_junk_comments(df: pd.DataFrame):
+            JUNK_STRINGS = [
+                ",",
+                ".",
+                "http://",
+                "http:// /",
+                "no .",
+                "# 3232 ; \ _ # 3232 ;",
+                "yes .",
+                "no",
+            ]
+            not_junk_mask = ~df["body"].isin(JUNK_STRINGS)
+            is_not_empty_or_whitespace = df["body"].str.strip() != ""
+            combined_mask = not_junk_mask & is_not_empty_or_whitespace
+
+            return df[combined_mask].copy()
+
+        def create_z_score_labels(df: pd.DataFrame):
+            def group_scaler(x):
+                # Handle groups with only 1 sample or empty groups to prevent errors
+                if len(x) < 2:
+                    return np.zeros(len(x))
+
+                scaler = StandardScaler()
+                # reshape(-1, 1) is required because StandardScaler expects 2D array
+                return scaler.fit_transform(x.values.reshape(-1, 1)).flatten()
+
+            # Apply the scaler per subreddit
+            df["z_score"] = df.groupby("subreddit")["score"].transform(
+                group_scaler
+            )
+
+            # --- 2. Create Class Labels (Binning) ---
+            def get_label(z):
+                # Controversial
+                if z < -1.5:
+                    return 0
+                # Baseline (Majority)
+                elif z <= 1.0:
+                    return 1
+                # High Quality
+                elif z <= 3.0:
+                    return 2
+                # Viral
+                else:
+                    return 3
+
+            df["labels"] = df["z_score"].apply(get_label)
+
+            # Drop the temporary z_score column (and score if not needed for features)
+            return df.drop(columns=["z_score"])
+
+        def text_feature_extraction(df: pd.DataFrame):
+            df["text"] = (
+                "r/" + df["subreddit"].astype(str) + " " + df["body"].astype(str)
+            )
+            return df
+
+        def tokenize_text(df: pd.DataFrame, column: str):
+            tokenizer = AutoTokenizer.from_pretrained("distilroberta-base")
+            encoded_tokens = tokenizer(
+                list(df[column]),
+                truncation=True,
+                padding="max_length",
+                max_length=325,
+            )
+            df["input_ids"] = encoded_tokens["input_ids"]
+            df["attention_mask"] = encoded_tokens["attention_mask"]
+
+            return df
+
+        return tokenize_text(
+            text_feature_extraction(
+                create_z_score_labels(filter_junk_comments(filter_word_count(df)))
+            ),
+            column="text",
+        )[["text", "input_ids", "attention_mask", "labels"]]
+    return (preprocess_function,)
+
+
+@app.cell
+def _(df, preprocess_function):
+    processed_df = preprocess_function(df)
+    return (processed_df,)
+
+
+@app.cell
+def _(processed_df, train_test_split):
+    train_df, test_df = train_test_split(
+        processed_df, test_size=0.3, stratify=processed_df["labels"], random_state=42
+    )
+    return test_df, train_df
 
 
 @app.cell
@@ -544,135 +643,16 @@ def _(TrainingArguments):
 
 
 @app.cell
-def _(pd):
-    # Preprocessing function
-    def preprocess_function(df: pd.DataFrame):
-        # Filter out rows with body word count < 300
-        clean_df = df[df["body"].str.split().str.len() < 300]
-        clean_df["body"] = clean_df["body"].apply(clean_comments)
-        # Most common strings after clean_comments() invocation
-        JUNK_STRINGS = [
-            ",",
-            ".",
-            "http://",
-            "http:// /",
-            "no .",
-            "# 3232 ; \ _ # 3232 ;",
-            "yes .",
-            "no",
-        ]
-        not_junk_mask = ~clean_df["body"].isin(JUNK_STRINGS)
-        is_not_empty_or_whitespace = clean_df["body"].str.strip() != ""
-
-        # --- Step 3: Combine both masks ---
-        # Apply both conditions: must not be a junk string AND must not be empty/whitespace-only
-        combined_mask = not_junk_mask & is_not_empty_or_whitespace
-
-        return clean_df[combined_mask].copy()
-    return (preprocess_function,)
-
-
-@app.cell
-def _(df, preprocess_function):
-    clean_df = preprocess_function(df)
-    return (clean_df,)
-
-
-@app.cell
-def _(clean_df, pd, tokenizer):
-    def tokenize_text(df: pd.DataFrame):
-        encoded_tokens = tokenizer(
-            list(df["body"]), truncation=True, padding="max_length", max_length=325
-        )
-        df["input_id"] = encoded_tokens["input_ids"]
-        df["attention_mask"] = encoded_tokens["attention_mask"]
-
-        return df
-
-
-    tokenize_text(clean_df)
-    return (tokenize_text,)
-
-
-@app.cell
-def _(StandardScaler, np):
-    def create_z_score_labels(df):
-        def group_scaler(x):
-            # Handle groups with only 1 sample or empty groups to prevent errors
-            if len(x) < 2:
-                return np.zeros(len(x))
-
-            scaler = StandardScaler()
-            # reshape(-1, 1) is required because StandardScaler expects 2D array
-            return scaler.fit_transform(x.values.reshape(-1, 1)).flatten()
-
-        # Apply the scaler per subreddit
-        df["z_score"] = df.groupby("subreddit")["score"].transform(group_scaler)
-
-        # --- 2. Create Class Labels (Binning) ---
-        def get_label(z):
-            if z < -1.5:
-                return 0  # Controversial
-            elif z <= 1.0:
-                return 1  # Baseline (Majority)
-            elif z <= 3.0:
-                return 2  # High Quality
-            else:
-                return 3  # Viral
-
-        df["labels"] = df["z_score"].apply(get_label)
-
-        # Drop the temporary z_score column (and score if not needed for features)
-        return df.drop(columns=["z_score"])
-    return (create_z_score_labels,)
-
-
-@app.cell
-def _(clean_df, create_z_score_labels):
-    labeled_df = create_z_score_labels(clean_df)
-    labeled_df["text"] = (
-        "r/"
-        + labeled_df["subreddit"].astype(str)
-        + " "
-        + labeled_df["body"].astype(str)
-    )
-    labeled_df = labeled_df[["text", "input_id", "attention_mask", "labels"]]
-    return (labeled_df,)
-
-
-@app.cell
-def _(train_df):
-    train_df
-    return
-
-
-@app.cell
-def _(test_df):
-    test_df
-    return
-
-
-@app.cell
-def _(labeled_df, train_test_split):
-    train_df, test_df = train_test_split(
-        labeled_df, test_size=0.3, stratify=labeled_df["labels"], random_state=42
-    )
-    return test_df, train_df
-
-
-@app.cell
 def _(
     AutoModelForSequenceClassification,
+    Dataset,
     Trainer,
     TrainingArguments,
-    clean_df,
     test_df,
-    tokenize_text,
     train_df,
 ):
-    tokenized_df = tokenize_text(clean_df)
     model = AutoModelForSequenceClassification.from_pretrained(
-        "FacebookAI/roberta-base", num_labels=4
+        "distilroberta-base", num_labels=4
     )
     training_args = TrainingArguments(
         output_dir="./results",  # Directory to save model checkpoints
@@ -692,8 +672,8 @@ def _(
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=train_df,
-        eval_dataset=test_df,
+        train_dataset=Dataset.from_pandas(train_df),
+        eval_dataset=Dataset.from_pandas(test_df),
     )
 
     trainer.train()
@@ -703,6 +683,12 @@ def _(
 @app.cell
 def _(df, torch):
     torch.nn.CrossEntropyLoss(weight=torch.tensor(df["score"]))
+    return
+
+
+@app.cell
+def _(train_df):
+    train_df[:10]
     return
 
 

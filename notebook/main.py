@@ -697,5 +697,139 @@ def _():
     return
 
 
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ## User Interface
+    """)
+    return
+
+
+@app.cell
+def _(pd):
+    import os
+    
+    def load_subreddits_from_csv(csv_path: str = "subreddits.csv"):
+        """
+        Load unique subreddits from a CSV file.
+        The CSV file should have a 'subreddit' column.
+        Returns a list of unique subreddits sorted alphabetically.
+        """
+        if not os.path.exists(csv_path):
+            # Return empty list if CSV doesn't exist yet
+            return []
+        
+        try:
+            df = pd.read_csv(csv_path)
+            if "subreddit" in df.columns:
+                subreddits = df["subreddit"].unique().tolist()
+                return sorted(subreddits)
+            else:
+                # If CSV exists but doesn't have 'subreddit' column, try first column
+                subreddits = df.iloc[:, 0].unique().tolist()
+                return sorted(subreddits)
+        except Exception as e:
+            print(f"Error loading subreddits from CSV: {e}")
+            return []
+    
+    return (load_subreddits_from_csv, os)
+
+
+@app.cell
+def _(load_subreddits_from_csv, os):
+    # Load subreddits from CSV file
+    # Try both notebook directory and project root
+    csv_paths = [
+        "subreddits.csv",  # In notebook directory
+        "../subreddits.csv",  # In project root
+    ]
+    
+    subreddits_list = []
+    for path in csv_paths:
+        subreddits_list = load_subreddits_from_csv(path)
+        if subreddits_list:
+            break
+    
+    return (subreddits_list,)
+
+
+@app.cell
+def _(mo):
+    # Create UI components
+    comment_input = mo.ui.text_area(
+        label="Enter your comment",
+        placeholder="Type your Reddit comment here...",
+        full_width=True,
+        rows=5,
+    )
+    
+    # Create search input for subreddit
+    subreddit_search = mo.ui.text(
+        label="Search Subreddit",
+        placeholder="Type to search for a subreddit...",
+        full_width=True,
+    )
+    return (comment_input, subreddit_search)
+
+
+@app.cell
+def _(subreddit_search, subreddits_list):
+    # Filter subreddits based on search input (reactive)
+    def filter_subreddits(search_term: str, subreddits: list):
+        if not subreddits:
+            return []
+        if not search_term:
+            return subreddits[:50]  # Show first 50 if no search
+        search_lower = search_term.lower()
+        filtered = [s for s in subreddits if search_lower in s.lower()]
+        return filtered[:50]  # Limit to 50 results
+    
+    search_term = subreddit_search.value if subreddit_search.value else ""
+    filtered_subreddits = filter_subreddits(search_term, subreddits_list)
+    return (filter_subreddits, filtered_subreddits, search_term)
+
+
+@app.cell
+def _(filtered_subreddits, mo, subreddits_list):
+    # Create dropdown with filtered results
+    subreddit_dropdown = mo.ui.dropdown(
+        options=filtered_subreddits if filtered_subreddits else (["No subreddits found"] if subreddits_list else ["No subreddits available - CSV file not found"]),
+        value=filtered_subreddits[0] if filtered_subreddits else None,
+        label="Select Subreddit",
+        full_width=True,
+    )
+    return (subreddit_dropdown,)
+
+
+@app.cell
+def _(comment_input, mo, subreddit_dropdown, subreddit_search):
+    # Display UI
+    ui_layout = mo.vstack([
+        mo.md("### Comment Input"),
+        comment_input,
+        mo.md("### Subreddit Selection"),
+        subreddit_search,
+        subreddit_dropdown,
+    ])
+    
+    ui_layout
+    return (ui_layout,)
+
+
+@app.cell
+def _(comment_input, mo, subreddit_dropdown):
+    # Display selected values
+    if comment_input.value and subreddit_dropdown.value:
+        mo.md(f"""
+        **Selected Subreddit:** r/{subreddit_dropdown.value}
+        
+        **Comment Preview:**
+        > {comment_input.value[:200]}{"..." if len(comment_input.value) > 200 else ""}
+        """)
+    else:
+        mo.md("Please enter a comment and select a subreddit to see the preview.")
+    return
+
+
 if __name__ == "__main__":
     app.run()

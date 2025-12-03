@@ -30,3 +30,7 @@ Install typst via [scoop](https://scoop.sh/#/) through `scoop install main/typst
 After syncing dependencies via `uv sync` and sourcing to the proper venv, you should be able to run `marimo edit main.py` within the `notebook/` directory.
 
 This should open up your default web browser to the notebook
+
+### User Interface
+
+The notebook includes a UI section for testing the model. To use the subreddit search feature, you'll need to create a `subreddits.csv` file in either the `notebook/` directory or the project root. The CSV file should have a `subreddit` column with one subreddit name per row. See `subreddits.csv.example` for the expected format.

@@ -9,8 +9,14 @@ def _():
     import marimo as mo
     from datasets import load_dataset
     from sklearn.model_selection import train_test_split
-    from sklearn.preprocessing import FunctionTransformer
-    from transformers import RobertaTokenizerFast, TrainingArguments, Trainer, AutoModelForSequenceClassification
+    from sklearn.preprocessing import FunctionTransformer, StandardScaler
+    from transformers import (
+        AutoTokenizer,
+        TrainingArguments,
+        Trainer,
+        AutoModelForSequenceClassification,
+        DataCollatorWithPadding,
+    )
     from sklearn.utils.class_weight import compute_class_weight
     import matplotlib.pyplot as plt
     from sklearn.decomposition import NMF, LatentDirichletAllocation, MiniBatchNMF
@@ -20,17 +26,22 @@ def _():
     import torch
     import numpy as np
     import pandas as pd
+
     alt.data_transformers.enable("vegafusion")
     return (
         AutoModelForSequenceClassification,
-        RobertaTokenizerFast,
+        AutoTokenizer,
+        StandardScaler,
+        Trainer,
         TrainingArguments,
         WordCloud,
         alt,
         load_dataset,
         mo,
+        np,
         pd,
         torch,
+        train_test_split,
     )
 
 
@@ -145,13 +156,19 @@ def _(alt, pd):
         count_df = pd.DataFrame({"word_count": word_counts})
 
         # Create the Altair histogram
-        chart = alt.Chart(count_df).mark_bar().encode(
-            x=alt.X('word_count', bin=alt.Bin(maxbins=500), title='Word Count'),
-            y=alt.Y('count()', title='Frequency'),
-            tooltip=[alt.Tooltip('word_count', bin=True), 'count()']
-        ).properties(
-            title=title
-        ).interactive()
+        chart = (
+            alt.Chart(count_df)
+            .mark_bar()
+            .encode(
+                x=alt.X(
+                    "word_count", bin=alt.Bin(maxbins=500), title="Word Count"
+                ),
+                y=alt.Y("count()", title="Frequency"),
+                tooltip=[alt.Tooltip("word_count", bin=True), "count()"],
+            )
+            .properties(title=title)
+            .interactive()
+        )
 
         return chart
     return (create_word_count_histogram,)
@@ -161,14 +178,19 @@ def _(alt, pd):
 def _(pd):
     def count_words_with_body(df: pd.DataFrame) -> pd.DataFrame:
         """Count words in the 'body' column and return a DataFrame with the body and corresponding word counts."""
-        word_counts = df['body'].apply(lambda x: len(x.split()))
-        return pd.DataFrame({"body": df['body'], "word_count": word_counts})
+        word_counts = df["body"].apply(lambda x: len(x.split()))
+        return pd.DataFrame({"body": df["body"], "word_count": word_counts})
     return (count_words_with_body,)
 
 
 @app.cell(hide_code=True)
 def _(alt, pd):
-    def create_score_histogram(score_series: pd.Series, title: str, low_score: float = None, high_score: float = None):
+    def create_score_histogram(
+        score_series: pd.Series,
+        title: str,
+        low_score: float = None,
+        high_score: float = None,
+    ):
         # === PANDAS FILTERING STEP ===
         # 1. Start with the full series
         filtered_series = score_series.copy()
@@ -182,25 +204,29 @@ def _(alt, pd):
         # =============================
 
         # 3. Convert the filtered Series to a DataFrame
-        df = filtered_series.to_frame(name='score')
+        df = filtered_series.to_frame(name="score")
 
         # Create the Altair Density Plot (KDE)
-        chart = alt.Chart(df).mark_bar().encode(
-        # Bin the 'Value' column to create the histogram bins.
-        # 'maxbins=30' specifies the maximum number of bars/bins.
-        x=alt.X('score', bin=alt.Bin(maxbins=100), title='Value Range'),
-
-        # Use 'count()' to get the frequency (bar height) for each bin.
-        y=alt.Y('count()', title='Frequency'),
-
-        # Add tooltips for interaction
-        tooltip=[
-            alt.Tooltip('score', bin=alt.Bin(maxbins=100), title='Value Range'), 
-            'count()'
-        ]
-        ).properties(
-            title=title
-        ).interactive()
+        chart = (
+            alt.Chart(df)
+            .mark_bar()
+            .encode(
+                # Bin the 'Value' column to create the histogram bins.
+                # 'maxbins=30' specifies the maximum number of bars/bins.
+                x=alt.X("score", bin=alt.Bin(maxbins=100), title="Value Range"),
+                # Use 'count()' to get the frequency (bar height) for each bin.
+                y=alt.Y("count()", title="Frequency"),
+                # Add tooltips for interaction
+                tooltip=[
+                    alt.Tooltip(
+                        "score", bin=alt.Bin(maxbins=100), title="Value Range"
+                    ),
+                    "count()",
+                ],
+            )
+            .properties(title=title)
+            .interactive()
+        )
 
         return chart
     return (create_score_histogram,)
@@ -216,7 +242,7 @@ def _(pd):
         text = " ".join(df["body"].astype(str).tolist())
 
         # Use regex to remove punctuation and make everything lowercase
-        words = re.findall(r'\b\w+\b', text.lower())
+        words = re.findall(r"\b\w+\b", text.lower())
 
         # Count word frequencies
         word_counts = Counter(words)
@@ -235,24 +261,27 @@ def _(WordCloud, pd):
         from nltk.corpus import stopwords
         import matplotlib.pyplot as plt
         import re
-        nltk.download('stopwords')
-        text = data.str.cat(sep = " ")
+
+        nltk.download("stopwords")
+        text = data.str.cat(sep=" ")
         # Remove HTML tags and filter words with less than 5 characters
-        cleaned_text = re.sub(r'<.*?>', '', text)  # Remove HTML content
-        words = re.findall(r'\b\w{5,}\b', cleaned_text)  # Match words with 5 or more characters
+        cleaned_text = re.sub(r"<.*?>", "", text)  # Remove HTML content
+        words = re.findall(
+            r"\b\w{5,}\b", cleaned_text
+        )  # Match words with 5 or more characters
 
         word_cloud = WordCloud(
             max_words=1000,
-            stopwords=stopwords.words('english').append("like"),
+            stopwords=stopwords.words("english").append("like"),
             collocations=False,
-            scale=2
+            scale=2,
         ).generate(" ".join(words))  # Generate word cloud from filtered words
 
         plt.figure(figsize=(10, 5))
-        plt.imshow(word_cloud, interpolation='bilinear')
+        plt.imshow(word_cloud, interpolation="bilinear")
         plt.axis("off")
         plt.title(title)
-        plt.savefig(title, format='png', bbox_inches='tight')
+        plt.savefig(title, format="png", bbox_inches="tight")
         plt.show()
     return (generate_stop_words,)
 
@@ -261,13 +290,21 @@ def _(WordCloud, pd):
 def _(alt, pd):
     def create_subreddit_histogram(df: pd.DataFrame):
         """Histogram of the subreddits"""
-        df = df.groupby('subreddit').size().reset_index(name='value').nlargest(10, "value")
-        histogram = alt.Chart(df).mark_bar().encode(
-            x=alt.X('subreddit', title='Subreddit', sort='-y'),
-            y=alt.Y('value:Q', title='Number of Comments'),
-            color=alt.Color('subreddit', title='Subreddit')
-        ).properties(
-            title='Comments Count per Subreddit'
+        df = (
+            df.groupby("subreddit")
+            .size()
+            .reset_index(name="value")
+            .nlargest(10, "value")
+        )
+        histogram = (
+            alt.Chart(df)
+            .mark_bar()
+            .encode(
+                x=alt.X("subreddit", title="Subreddit", sort="-y"),
+                y=alt.Y("value:Q", title="Number of Comments"),
+                color=alt.Color("subreddit", title="Subreddit"),
+            )
+            .properties(title="Comments Count per Subreddit")
         )
 
         return histogram
@@ -277,12 +314,15 @@ def _(alt, pd):
 @app.cell
 def _(alt, pd):
     def create_subreddit_avg_votes_histogram(data: pd.DataFrame):
-        chart = alt.Chart(data).mark_bar().encode(
-            x=alt.X('subreddit', axis=alt.Axis(labels=False)),
-            y=alt.Y('score:Q', title="Average score"),
-            color=alt.Color('subreddit', title='Subreddit', legend=None)
-        ).properties(
-            title="Subreddit average upvotes"
+        chart = (
+            alt.Chart(data)
+            .mark_bar()
+            .encode(
+                x=alt.X("subreddit", axis=alt.Axis(labels=False)),
+                y=alt.Y("score:Q", title="Average score"),
+                color=alt.Color("subreddit", title="Subreddit", legend=None),
+            )
+            .properties(title="Subreddit average upvotes")
         )
 
         return chart
@@ -297,13 +337,19 @@ def _(alt, count_words_with_body, pd):
         word_counts_df = count_words_with_body(df)
 
         # Create an Altair bar chart
-        chart = alt.Chart(word_counts_df).mark_bar().encode(
-            x=alt.X('word_count', title='Word Count'),
-            y=alt.Y('count()', title='Frequency', scale=alt.Scale(domain=[0, 55])),
-            tooltip=['body', 'word_count']
-        ).properties(
-            title=title
-        ).interactive()
+        chart = (
+            alt.Chart(word_counts_df)
+            .mark_bar()
+            .encode(
+                x=alt.X("word_count", title="Word Count"),
+                y=alt.Y(
+                    "count()", title="Frequency", scale=alt.Scale(domain=[0, 55])
+                ),
+                tooltip=["body", "word_count"],
+            )
+            .properties(title=title)
+            .interactive()
+        )
 
         return chart
     return (create_word_counts_chart,)
@@ -323,13 +369,17 @@ def _(df):
 
 @app.cell
 def _(breh, create_subreddit_avg_votes_histogram):
-    create_subreddit_avg_votes_histogram(breh).save(fp="subreddit_avg.png", scale_factor=2)
+    create_subreddit_avg_votes_histogram(breh).save(
+        fp="subreddit_avg.png", scale_factor=2
+    )
     return
 
 
 @app.cell
 def _(create_word_counts_chart, df):
-    create_word_counts_chart(df, "Comment length distribution").save(fp="comment_length_distribution.png", scale_factor=2)
+    create_word_counts_chart(df, "Comment length distribution").save(
+        fp="comment_length_distribution.png", scale_factor=2
+    )
     return
 
 
@@ -341,8 +391,12 @@ def _(df):
 
 @app.cell
 def _(create_word_count_histogram, df):
-    create_word_count_histogram(df=df[df["body"].str.split().str.len() < 300], column="body", title="Comment Word Count Distribution")
-        # .save(fp="word_count_distribution.png", scale_factor=2)
+    create_word_count_histogram(
+        df=df[df["body"].str.split().str.len() < 300],
+        column="body",
+        title="Comment Word Count Distribution",
+    )
+    # .save(fp="word_count_distribution.png", scale_factor=2)
     return
 
 
@@ -360,7 +414,9 @@ def _(count_words_with_body, df):
 
 @app.cell
 def _(create_score_histogram, df):
-    create_score_histogram(df["score"], "scores", low_score=-10, high_score=50).save(fp="score_frequency.png", scale_factor=2)
+    create_score_histogram(
+        df["score"], "scores", low_score=-10, high_score=50
+    ).save(fp="score_frequency.png", scale_factor=2)
     return
 
 
@@ -372,7 +428,9 @@ def _(df):
 
 @app.cell
 def _(create_top_n_pie_chart, df):
-    create_top_n_pie_chart(df=df, top_n=10).save(fp="subreddit_pie.png", scale_factor=2)
+    create_top_n_pie_chart(df=df, top_n=10).save(
+        fp="subreddit_pie.png", scale_factor=2
+    )
     return
 
 
@@ -381,13 +439,19 @@ def _(df, generate_stop_words):
     # Generate word clouds for comments with negative votes and positive votes
     negative_scores_df = df[df["score"] > 5]
     positive_scores_df = df[df["score"] < -3]
-    generate_stop_words(negative_scores_df["body"], title="Words commonly found with negatively voted comments")
+    generate_stop_words(
+        negative_scores_df["body"],
+        title="Words commonly found with negatively voted comments",
+    )
     return (positive_scores_df,)
 
 
 @app.cell
 def _(generate_stop_words, positive_scores_df):
-    generate_stop_words(positive_scores_df["body"], title="Words commonly found with positively voted comments")
+    generate_stop_words(
+        positive_scores_df["body"],
+        title="Words commonly found with positively voted comments",
+    )
     return
 
 
@@ -402,31 +466,38 @@ def _(mo):
 @app.function
 def clean_comments(text: str):
     import re
-   # --- Collapse spaced-out URL patterns specifically ---
+
+    # --- Collapse spaced-out URL patterns specifically ---
     # e.g., "h t t p : / /" -> "http://"
-    text = re.sub(r'h\s*t\s*t\s*p\s*:\s*/\s*/', 'http://', text, flags=re.IGNORECASE)
-    text = re.sub(r'h\s*t\s*t\s*p\s*s\s*:\s*/\s*/', 'https://', text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"h\s*t\s*t\s*p\s*:\s*/\s*/", "http://", text, flags=re.IGNORECASE
+    )
+    text = re.sub(
+        r"h\s*t\s*t\s*p\s*s\s*:\s*/\s*/", "https://", text, flags=re.IGNORECASE
+    )
 
     # Collapse domain patterns: "example . com" -> "example.com"
-    text = re.sub(r'(\w)\s*\.\s*(\w)', r'\1.\2', text)
+    text = re.sub(r"(\w)\s*\.\s*(\w)", r"\1.\2", text)
 
     # --- Collapse spaced HTML entities ONLY ---
     # e.g., "& g t ;" -> "&gt;"
-    text = re.sub(r'&\s*([a-zA-Z0-9]+)\s*;', r'&\1;', text)
+    text = re.sub(r"&\s*([a-zA-Z0-9]+)\s*;", r"&\1;", text)
 
     # --- Remove HTML entities ---
-    text = re.sub(r'&[#0-9a-zA-Z]+;', '', text)
+    text = re.sub(r"&[#0-9a-zA-Z]+;", "", text)
 
     # --- Remove markdown links ---
-    text = re.sub(r'\[\s*[^]]+?\s*\]\s*\(\s*[^)]+?\s*\)', '', text)
+    text = re.sub(r"\[\s*[^]]+?\s*\]\s*\(\s*[^)]+?\s*\)", "", text)
 
     # --- Collapse any now-normalized URL after fixing spacing ---
-    text = re.sub(r'https?://\S+', '', text)
-    text = re.sub(r'www\.\S+', '', text)
-    text = re.sub(r'\b[a-z0-9.-]+\.[a-z]{2,}(?:/\S*)?', '', text, flags=re.IGNORECASE)
+    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"www\.\S+", "", text)
+    text = re.sub(
+        r"\b[a-z0-9.-]+\.[a-z]{2,}(?:/\S*)?", "", text, flags=re.IGNORECASE
+    )
 
     # --- Clean up leftover whitespace ---
-    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
@@ -447,27 +518,27 @@ def _(mo):
 
 
 @app.cell
-def _(RobertaTokenizerFast):
-    tokenizer = RobertaTokenizerFast.from_pretrained("FacebookAI/roberta-base")
+def _(AutoTokenizer):
+    tokenizer = AutoTokenizer.from_pretrained("FacebookAI/roberta-base")
     return (tokenizer,)
 
 
 @app.cell
 def _(TrainingArguments):
     training_args = TrainingArguments(
-        output_dir="./results",           # Directory for saving model checkpoints
-        eval_strategy="epoch",    # Evaluate at the end of each epoch
+        output_dir="./results",  # Directory for saving model checkpoints
+        eval_strategy="epoch",  # Evaluate at the end of each epoch
         save_strategy="epoch",
-        learning_rate=5e-5,              # Start with a small learning rate
+        learning_rate=5e-5,  # Start with a small learning rate
         per_device_train_batch_size=16,  # Batch size per GPU
         per_device_eval_batch_size=16,
-        num_train_epochs=3,              # Number of epochs
-        weight_decay=0.01,               # Regularization
-        save_total_limit=2,              # Limit checkpoints to save space
-        load_best_model_at_end=True,     # Automatically load the best checkpoint
-        logging_dir="./logs",            # Directory for logs
-        logging_steps=100,               # Log every 100 steps
-        fp16=True                        # Enable mixed precision for faster training
+        num_train_epochs=3,  # Number of epochs
+        weight_decay=0.01,  # Regularization
+        save_total_limit=2,  # Limit checkpoints to save space
+        load_best_model_at_end=True,  # Automatically load the best checkpoint
+        logging_dir="./logs",  # Directory for logs
+        logging_steps=100,  # Log every 100 steps
+        fp16=True,  # Enable mixed precision for faster training
     )
     return
 
@@ -488,10 +559,10 @@ def _(pd):
             "no .",
             "# 3232 ; \ _ # 3232 ;",
             "yes .",
-            "no"
+            "no",
         ]
-        not_junk_mask = ~clean_df['body'].isin(JUNK_STRINGS)
-        is_not_empty_or_whitespace = (clean_df['body'].str.strip() != "")
+        not_junk_mask = ~clean_df["body"].isin(JUNK_STRINGS)
+        is_not_empty_or_whitespace = clean_df["body"].str.strip() != ""
 
         # --- Step 3: Combine both masks ---
         # Apply both conditions: must not be a junk string AND must not be empty/whitespace-only
@@ -511,32 +582,121 @@ def _(df, preprocess_function):
 def _(clean_df, pd, tokenizer):
     def tokenize_text(df: pd.DataFrame):
         encoded_tokens = tokenizer(
-            list(df["body"]), 
-            truncation=True, 
-            padding="max_length",
-            max_length=325
+            list(df["body"]), truncation=True, padding="max_length", max_length=325
         )
         df["input_id"] = encoded_tokens["input_ids"]
         df["attention_mask"] = encoded_tokens["attention_mask"]
 
         return df
+
+
     tokenize_text(clean_df)
     return (tokenize_text,)
 
 
-app._unparsable_cell(
-    r"""
-    #TODO:
-    - 
-    """,
-    name="_"
-)
+@app.cell
+def _(StandardScaler, np):
+    def create_z_score_labels(df):
+        def group_scaler(x):
+            # Handle groups with only 1 sample or empty groups to prevent errors
+            if len(x) < 2:
+                return np.zeros(len(x))
+
+            scaler = StandardScaler()
+            # reshape(-1, 1) is required because StandardScaler expects 2D array
+            return scaler.fit_transform(x.values.reshape(-1, 1)).flatten()
+
+        # Apply the scaler per subreddit
+        df["z_score"] = df.groupby("subreddit")["score"].transform(group_scaler)
+
+        # --- 2. Create Class Labels (Binning) ---
+        def get_label(z):
+            if z < -1.5:
+                return 0  # Controversial
+            elif z <= 1.0:
+                return 1  # Baseline (Majority)
+            elif z <= 3.0:
+                return 2  # High Quality
+            else:
+                return 3  # Viral
+
+        df["labels"] = df["z_score"].apply(get_label)
+
+        # Drop the temporary z_score column (and score if not needed for features)
+        return df.drop(columns=["z_score"])
+    return (create_z_score_labels,)
 
 
 @app.cell
-def _(AutoModelForSequenceClassification, clean_df, tokenize_text):
+def _(clean_df, create_z_score_labels):
+    labeled_df = create_z_score_labels(clean_df)
+    labeled_df["text"] = (
+        "r/"
+        + labeled_df["subreddit"].astype(str)
+        + " "
+        + labeled_df["body"].astype(str)
+    )
+    labeled_df = labeled_df[["text", "input_id", "attention_mask", "labels"]]
+    return (labeled_df,)
+
+
+@app.cell
+def _(train_df):
+    train_df
+    return
+
+
+@app.cell
+def _(test_df):
+    test_df
+    return
+
+
+@app.cell
+def _(labeled_df, train_test_split):
+    train_df, test_df = train_test_split(
+        labeled_df, test_size=0.3, stratify=labeled_df["labels"], random_state=42
+    )
+    return test_df, train_df
+
+
+@app.cell
+def _(
+    AutoModelForSequenceClassification,
+    Trainer,
+    TrainingArguments,
+    clean_df,
+    test_df,
+    tokenize_text,
+    train_df,
+):
     tokenized_df = tokenize_text(clean_df)
-    model = AutoModelForSequenceClassification.from_pretrained("FacebookAI/roberta-base", num_labels=4)
+    model = AutoModelForSequenceClassification.from_pretrained(
+        "FacebookAI/roberta-base", num_labels=4
+    )
+    training_args = TrainingArguments(
+        output_dir="./results",  # Directory to save model checkpoints
+        save_strategy="epoch",
+        eval_strategy="epoch",  # Evaluate every 'n' steps
+        num_train_epochs=3,  # Number of training epochs
+        # eval_steps=500,                         # Evaluation frequency
+        per_device_train_batch_size=16,  # Training batch size
+        per_device_eval_batch_size=16,  # Evaluation batch size
+        learning_rate=2e-5,  # Standard learning rate for fine-tuning BERT
+        weight_decay=0.01,  # Regularization to prevent overfitting
+        save_total_limit=2,  # Save checkpoints every 'n' steps
+        load_best_model_at_end=True,  # Load the best model based on evaluation metrics
+        fp16=True,  # Enable mixed precision for faster training
+        logging_steps=100,  # Log metrics every 'n' steps
+    )
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_df,
+        eval_dataset=test_df,
+    )
+
+    trainer.train()
     return
 
 
